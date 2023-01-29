@@ -30,6 +30,7 @@ from distutils.version import LooseVersion
 assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
 assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 
+os.environ["NCPUS"] = "4"
 
 ############################################################
 #  Utility Functions
@@ -1068,7 +1069,7 @@ def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
                                    config.IMAGES_PER_GPU)
 
     loss = smooth_l1_loss(target_bbox, rpn_bbox)
-    
+
     loss = K.switch(tf.size(loss) > 0, K.mean(loss), tf.constant(0.0))
     return loss
 
@@ -1699,14 +1700,14 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             # If the image source is not to be augmented pass None as augmentation
             if dataset.image_info[image_id]['source'] in no_augmentation_sources:
                 image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
-                load_image_gt(dataset, config, image_id, augment=augment,
-                              augmentation=None,
-                              use_mini_mask=config.USE_MINI_MASK)
+                    load_image_gt(dataset, config, image_id, augment=augment,
+                                  augmentation=None,
+                                  use_mini_mask=config.USE_MINI_MASK)
             else:
                 image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
                     load_image_gt(dataset, config, image_id, augment=augment,
-                                augmentation=augmentation,
-                                use_mini_mask=config.USE_MINI_MASK)
+                                  augmentation=augmentation,
+                                  use_mini_mask=config.USE_MINI_MASK)
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
@@ -1854,6 +1855,8 @@ class MaskRCNN():
         # Inputs
         input_image = KL.Input(
             shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
+        # input_image = KL.Input(
+        #     shape=[128, 128, config.IMAGE_SHAPE[2]], name="input_image")  # for ShapesConfig()
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
         if mode == "training":
@@ -2370,8 +2373,10 @@ class MaskRCNN():
             validation_data=val_generator,
             validation_steps=self.config.VALIDATION_STEPS,
             max_queue_size=100,
-            workers=workers,
-            use_multiprocessing=True,
+            # workers=workers,
+            # workers=int(os.environ["NCPUS"]),  # Linux
+            workers=1,  # Windows
+            use_multiprocessing=False,  # True in Linux and False in windows
         )
         self.epoch = max(self.epoch, epochs)
 

@@ -61,7 +61,7 @@ COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 # Directory to save logs and model checkpoints, if not provided
 # through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
-DEFAULT_DATASET_YEAR = "2014"
+DEFAULT_DATASET_YEAR = "2017"
 
 ############################################################
 #  Configurations
@@ -117,6 +117,7 @@ class CocoDataset(utils.Dataset):
         if not class_ids:
             # All classes
             class_ids = sorted(coco.getCatIds())
+
 
         # All images or a subset?
         if class_ids:

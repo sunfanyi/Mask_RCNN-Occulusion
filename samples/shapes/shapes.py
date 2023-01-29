@@ -11,6 +11,8 @@ Written by Waleed Abdulla
 
 import os
 import sys
+import json
+import datetime
 import math
 import random
 import numpy as np
@@ -22,7 +24,14 @@ ROOT_DIR = os.path.abspath("../../")
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn.config import Config
-from mrcnn import utils
+from mrcnn import model as modellib, utils
+
+# Path to trained weights file
+COCO_WEIGHTS_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
+
+# Directory to save logs and model checkpoints, if not provided
+# through the command line argument --logs
+DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 
 
 class ShapesConfig(Config):
@@ -36,7 +45,7 @@ class ShapesConfig(Config):
     # Train on 1 GPU and 8 images per GPU. We can put multiple images on each
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
     GPU_COUNT = 1
-    IMAGES_PER_GPU = 8
+    IMAGES_PER_GPU = 1  # 8 would fail in my computer
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 3  # background + 3 shapes
@@ -58,6 +67,28 @@ class ShapesConfig(Config):
 
     # use small validation steps since the epoch is small
     VALIDATION_STEPS = 5
+
+
+def random_shape(height, width):
+    """Generates specifications of a random shape that lies within
+    the given height and width boundaries.
+    Returns a tuple of three valus:
+    * The shape name (square, circle, ...)
+    * Shape color: a tuple of 3 values, RGB.
+    * Shape dimensions: A tuple of values that define the shape size
+                        and location. Differs per shape type.
+    """
+    # Shape
+    shape = random.choice(["square", "circle", "triangle"])
+    # Color
+    color = tuple([random.randint(0, 255) for _ in range(3)])
+    # Center x, y
+    buffer = 20
+    y = random.randint(buffer, height - buffer - 1)
+    x = random.randint(buffer, width - buffer - 1)
+    # Size
+    s = random.randint(buffer, height // 4)
+    return shape, color, (x, y, s)
 
 
 class ShapesDataset(utils.Dataset):
@@ -145,27 +176,6 @@ class ShapesDataset(utils.Dataset):
             image = cv2.fillPoly(image, points, color)
         return image
 
-    def random_shape(self, height, width):
-        """Generates specifications of a random shape that lies within
-        the given height and width boundaries.
-        Returns a tuple of three valus:
-        * The shape name (square, circle, ...)
-        * Shape color: a tuple of 3 values, RGB.
-        * Shape dimensions: A tuple of values that define the shape size
-                            and location. Differs per shape type.
-        """
-        # Shape
-        shape = random.choice(["square", "circle", "triangle"])
-        # Color
-        color = tuple([random.randint(0, 255) for _ in range(3)])
-        # Center x, y
-        buffer = 20
-        y = random.randint(buffer, height - buffer - 1)
-        x = random.randint(buffer, width - buffer - 1)
-        # Size
-        s = random.randint(buffer, height // 4)
-        return shape, color, (x, y, s)
-
     def random_image(self, height, width):
         """Creates random specifications of an image with multiple shapes.
         Returns the background color of the image and a list of shape
@@ -179,7 +189,7 @@ class ShapesDataset(utils.Dataset):
         boxes = []
         N = random.randint(1, 4)
         for _ in range(N):
-            shape, color, dims = self.random_shape(height, width)
+            shape, color, dims = random_shape(height, width)
             shapes.append((shape, color, dims))
             x, y, s = dims
             boxes.append([y - s, x - s, y + s, x + s])
@@ -189,3 +199,112 @@ class ShapesDataset(utils.Dataset):
             np.array(boxes), np.arange(N), 0.3)
         shapes = [s for i, s in enumerate(shapes) if i in keep_ixs]
         return bg_color, shapes
+
+
+############################################################
+#  Training
+############################################################
+
+if __name__ == '__main__':
+    import argparse
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Train Mask R-CNN to detect shapes.')
+    parser.add_argument("command",
+                        metavar="<command>",
+                        help="'train' or 'evaluate'")
+    parser.add_argument('--weights', required=True,
+                        metavar="/path/to/weights.h5",
+                        help="Path to weights .h5 file or 'coco'")
+    parser.add_argument('--logs', required=False,
+                        default=DEFAULT_LOGS_DIR,
+                        metavar="/path/to/logs/",
+                        help='Logs and checkpoints directory (default=logs/)')
+    args = parser.parse_args()
+
+    # # Validate arguments
+    # if args.command == "train":
+    #     assert args.dataset, "Argument --dataset is required for training"
+    # elif args.command == "evaluate":
+    #     assert args.image or args.video,\
+    #            "Provide --image or --video to apply color splash"
+
+    print("Weights: ", args.weights)
+    # print("Dataset: ", args.dataset)
+    print("Logs: ", args.logs)
+
+    # Configurations
+    if args.command == "train":
+        config = ShapesConfig()
+    else:
+        class InferenceConfig(ShapesConfig):
+            # Set batch size to 1 since we'll be running inference on
+            # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+            GPU_COUNT = 1
+            IMAGES_PER_GPU = 1
+        config = InferenceConfig()
+    config.display()
+
+    # Create model
+    if args.command == "train":
+        model = modellib.MaskRCNN(mode="training", config=config,
+                                  model_dir=args.logs)
+    else:
+        model = modellib.MaskRCNN(mode="inference", config=config,
+                                  model_dir=args.logs)
+
+    # Select weights file to load
+    if args.weights.lower() == "coco":
+        weights_path = COCO_WEIGHTS_PATH
+        # Download weights file
+        if not os.path.exists(weights_path):
+            utils.download_trained_weights(weights_path)
+    elif args.weights.lower() == "last":
+        # Find last trained weights
+        weights_path = model.find_last()
+    elif args.weights.lower() == "imagenet":
+        # Start from ImageNet trained weights
+        weights_path = model.get_imagenet_weights()
+    else:
+        weights_path = args.weights
+
+    # Load weights
+    print("Loading weights ", weights_path)
+    if args.weights.lower() == "coco":
+        # Exclude the last layers because they require a matching
+        # number of classes
+        model.load_weights(weights_path, by_name=True, exclude=[
+            "mrcnn_class_logits", "mrcnn_bbox_fc",
+            "mrcnn_bbox", "mrcnn_mask"])
+    else:
+        model.load_weights(weights_path, by_name=True)
+
+    # Train or evaluate
+    if args.command == "train":
+        # Training dataset.
+        dataset_train = ShapesDataset()
+        dataset_train.load_shapes(500, config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1])
+        dataset_train.prepare()
+
+        # Validation dataset
+        dataset_val = ShapesDataset()
+        dataset_train.load_shapes(50, config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1])
+        dataset_val.prepare()
+
+        # *** This training schedule is an example. Update to your needs ***
+        # Since we're using a very small dataset, and starting from
+        # COCO trained weights, we don't need to train too long. Also,
+        # no need to train all layers, just the heads should do it.
+        print("Training network heads")
+        model.train(dataset_train, dataset_val,
+                    learning_rate=config.LEARNING_RATE,
+                    epochs=1,
+                    layers='heads')
+    elif args.command == "evaluate":
+        # detect_and_color_splash(model, image_path=args.image,
+        #                         video_path=args.video)
+        pass
+    else:
+        print("'{}' is not recognized. "
+              "Use 'train' or 'splash'".format(args.command))
